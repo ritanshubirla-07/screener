@@ -886,15 +886,15 @@
               <button class="tf-btn" data-days="3650">10Y</button>
               <button class="tf-btn active" data-days="10000">MAX</button>
             </div>
-            <div style="display:flex; gap:10px; font-size:11.5px; font-weight:700; color:#37474f; margin-left:10px;">
+            <div style="display:flex; gap:12px; font-size:11.5px; font-weight:800; color:#37474f; margin-left:10px;">
               <label style="cursor:pointer; display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk50Dma" checked> <span style="color:#e65100;">50 DMA</span>
+                <input type="checkbox" id="chk50Dma" checked> <span style="color:#0284c7;">50 DMA</span>
               </label>
               <label style="cursor:pointer; display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk200Dma" checked> <span style="color:#1565c0;">200 DMA</span>
+                <input type="checkbox" id="chk200Dma" checked> <span style="color:#7c3aed;">200 DMA</span>
               </label>
               <label style="cursor:pointer; display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chkVol" checked> <span>VOLUME</span>
+                <input type="checkbox" id="chkVol" checked> <span style="color:#0f766e;">VOL BARS</span>
               </label>
             </div>
           </div>
@@ -911,7 +911,7 @@
         </div>
 
         <!-- CANVAS CONTAINER -->
-        <div class="chart-canvas-wrapper" style="position:relative; width:100%; height:460px; background:#ffffff; border:1px solid var(--border-gray); border-radius:4px; padding:8px; box-sizing:border-box;">
+        <div class="chart-canvas-wrapper" style="position:relative; width:100%; height:500px; background:#ffffff; border:1px solid var(--border-gray); border-radius:4px; padding:8px; box-sizing:border-box;">
           <canvas id="priceCanvas" style="width:100%; height:100%; display:block; cursor:crosshair;"></canvas>
           <div id="chartTooltip" class="chart-tooltip" style="display:none;"></div>
           <div id="chartLoading" style="position:absolute; inset:0; background:rgba(255,255,255,0.85); display:none; align-items:center; justify-content:center; font-weight:800; font-size:13.5px; color:#173751;">
@@ -1745,22 +1745,35 @@
       }
 
       // Chart margins
-      const padLeft = 10;
-      const padRight = 65;
-      const padTop = 15;
+      const padLeft = 14;
+      const padRight = 78;
+      const padTop = 18;
       const padBottom = 26;
       const plotW = width - padLeft - padRight;
       const plotH = height - padTop - padBottom;
 
-      // Price height and Volume height
-      const volH = showVol ? Math.round(plotH * 0.20) : 0;
-      const priceH = plotH - volH;
+      // Professional Analyst Theme: Bullish Emerald Green or Bearish Coral Red
+      const isBullish = lastItem.price >= firstItem.price;
+      const themeGreen = '#10b981';
+      const themeRed = '#ef4444';
+      const priceColor = isBullish ? themeGreen : themeRed;
+      const dma50Color = '#0284c7';   // Electric Blue
+      const dma200Color = '#7c3aed';  // Technical Violet
 
-      // Price scale with 4% padding
+      // Dedicated Volume Sub-Pane (26% of plot height) with clear separation
+      const volH = showVol ? Math.round(plotH * 0.26) : 0;
+      const priceH = plotH - (showVol ? volH + 16 : 0);
+
+      // Price scale with 4% vertical breathing room
       const priceRange = (maxP - minP) || 1;
       const paddedMin = Math.max(0, minP - priceRange * 0.04);
       const paddedMax = maxP + priceRange * 0.04;
       const paddedRange = paddedMax - paddedMin;
+
+      // Intelligent Volume Outlier Smoothing (95th Percentile)
+      const sortedVols = items.map(it => it.vol).filter(v => v > 0).sort((a, b) => a - b);
+      const p95Vol = sortedVols.length ? sortedVols[Math.floor(sortedVols.length * 0.95)] : maxVol;
+      const effectiveMaxVol = Math.max(1, p95Vol > 0 ? p95Vol * 1.3 : maxVol);
 
       function getX(i) {
         return padLeft + (i / (items.length - 1)) * plotW;
@@ -1769,13 +1782,14 @@
         return padTop + priceH - ((p - paddedMin) / paddedRange) * priceH;
       }
       function getVolY(v) {
-        if (!maxVol) return padTop + plotH;
-        return padTop + plotH - (v / maxVol) * volH;
+        if (!effectiveMaxVol) return padTop + plotH;
+        const ratio = Math.min(1, v / effectiveMaxVol);
+        return (padTop + plotH) - Math.max(3, ratio * volH);
       }
 
-      // 1. Draw horizontal gridlines and Y-axis labels
+      // 1. Clear & Draw horizontal gridlines & Y-axis labels
       ctx.clearRect(0, 0, width, height);
-      ctx.strokeStyle = '#e2e8f0';
+      ctx.strokeStyle = '#f1f5f9';
       ctx.lineWidth = 1;
       ctx.fillStyle = '#64748b';
       ctx.font = '10px Roboto Mono, monospace';
@@ -1793,9 +1807,28 @@
         ctx.fillText(`₹${Math.round(val).toLocaleString('en-IN')}`, padLeft + plotW + 8, y + 3);
       }
 
+      // Volume sub-pane divider & baseline
+      if (showVol) {
+        const volTopY = padTop + plotH - volH;
+        ctx.beginPath();
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        ctx.moveTo(padLeft, volTopY);
+        ctx.lineTo(padLeft + plotW, volTopY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 9px Roboto Condensed, sans-serif';
+        ctx.fillText(`VOL`, padLeft + plotW + 8, volTopY + 10);
+      }
+
       // 2. Draw X-axis date marks
       const xLabels = 6;
       ctx.textAlign = 'center';
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px Roboto Mono, monospace';
       for (let s = 0; s < xLabels; s++) {
         const idx = Math.min(items.length - 1, Math.round((s / (xLabels - 1)) * (items.length - 1)));
         const it = items[idx];
@@ -1803,25 +1836,28 @@
         ctx.fillText(it.date, x, padTop + plotH + 18);
       }
 
-      // 3. Draw Volume bars
+      // 3. Draw Volume bars (High Visibility Trading Red/Green Bars)
       if (showVol && maxVol > 0) {
-        const barW = Math.max(1, (plotW / items.length) * 0.7);
+        const barSpacing = plotW / items.length;
+        const barW = Math.max(2, Math.min(14, barSpacing * 0.8));
+
         items.forEach((it, i) => {
           if (!it.vol) return;
           const x = getX(i);
           const y = getVolY(it.vol);
           const bH = (padTop + plotH) - y;
-          const isUp = i > 0 ? it.price >= items[i - 1].price : true;
-          ctx.fillStyle = isUp ? 'rgba(34, 197, 94, 0.35)' : 'rgba(239, 68, 68, 0.35)';
+          const isDayUp = i > 0 ? it.price >= items[i - 1].price : isBullish;
+
+          ctx.fillStyle = isDayUp ? 'rgba(16, 185, 129, 0.80)' : 'rgba(239, 68, 68, 0.80)';
           ctx.fillRect(x - barW / 2, y, barW, bH);
         });
       }
 
-      // 4. Draw 200 DMA line
+      // 4. Draw 200 DMA line (Technical Violet)
       if (show200) {
         ctx.beginPath();
-        ctx.strokeStyle = '#2563eb';
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = dma200Color;
+        ctx.lineWidth = 1.8;
         let started = false;
         items.forEach((it, i) => {
           if (it.d200 != null && !isNaN(it.d200)) {
@@ -1834,11 +1870,11 @@
         ctx.stroke();
       }
 
-      // 5. Draw 50 DMA line
+      // 5. Draw 50 DMA line (Electric Blue)
       if (show50) {
         ctx.beginPath();
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = dma50Color;
+        ctx.lineWidth = 1.8;
         let started = false;
         items.forEach((it, i) => {
           if (it.d50 != null && !isNaN(it.d50)) {
@@ -1853,8 +1889,15 @@
 
       // 6. Draw Price Gradient Fill
       const grad = ctx.createLinearGradient(0, padTop, 0, padTop + priceH);
-      grad.addColorStop(0, 'rgba(15, 23, 42, 0.16)');
-      grad.addColorStop(1, 'rgba(15, 23, 42, 0.00)');
+      if (isBullish) {
+        grad.addColorStop(0, 'rgba(16, 185, 129, 0.20)');
+        grad.addColorStop(0.7, 'rgba(16, 185, 129, 0.04)');
+        grad.addColorStop(1, 'rgba(16, 185, 129, 0.00)');
+      } else {
+        grad.addColorStop(0, 'rgba(239, 68, 68, 0.20)');
+        grad.addColorStop(0.7, 'rgba(239, 68, 68, 0.04)');
+        grad.addColorStop(1, 'rgba(239, 68, 68, 0.00)');
+      }
 
       ctx.beginPath();
       ctx.moveTo(getX(0), getY(items[0].price));
@@ -1867,10 +1910,10 @@
       ctx.fillStyle = grad;
       ctx.fill();
 
-      // 7. Draw Main Price Line
+      // 7. Draw Main Price Line (Vibrant Analyst Green or Red)
       ctx.beginPath();
-      ctx.strokeStyle = '#0f172a';
-      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = priceColor;
+      ctx.lineWidth = 2.4;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       items.forEach((it, i) => {
@@ -1881,7 +1924,35 @@
       });
       ctx.stroke();
 
-      // 8. Hover Crosshair & Tooltip
+      // 8. Latest Price Reference Line & Right-Axis Price Badge
+      const lastY = getY(lastItem.price);
+      ctx.beginPath();
+      ctx.strokeStyle = isBullish ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.moveTo(padLeft, lastY);
+      ctx.lineTo(padLeft + plotW, lastY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const pillText = `₹${lastItem.price.toLocaleString('en-IN', {minimumFractionDigits: 1, maximumFractionDigits: 2})}`;
+      ctx.font = 'bold 10px Roboto Mono, monospace';
+      const pillW = ctx.measureText(pillText).width + 10;
+      const pillH = 18;
+      const pillX = padLeft + plotW + 6;
+      const pillY = Math.max(padTop - 2, Math.min(padTop + plotH - pillH, lastY - pillH / 2));
+
+      ctx.fillStyle = priceColor;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(pillX, pillY, pillW, pillH, 3);
+      else ctx.rect(pillX, pillY, pillW, pillH);
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.fillText(pillText, pillX + 5, pillY + 12.5);
+
+      // 9. Hover Crosshair & Tooltip
       if (chartHoverPoint) {
         const hIdx = chartHoverPoint.index;
         if (hIdx >= 0 && hIdx < items.length) {
@@ -1889,40 +1960,65 @@
           const hX = getX(hIdx);
           const hY = getY(it.price);
 
-          // Vertical line
+          // Vertical crosshair
           ctx.beginPath();
           ctx.strokeStyle = '#475569';
           ctx.lineWidth = 1;
-          ctx.setLineDash([4, 4]);
+          ctx.setLineDash([3, 3]);
           ctx.moveTo(hX, padTop);
           ctx.lineTo(hX, padTop + plotH);
           ctx.stroke();
+
+          // Horizontal crosshair
+          ctx.beginPath();
+          ctx.moveTo(padLeft, hY);
+          ctx.lineTo(padLeft + plotW, hY);
+          ctx.stroke();
           ctx.setLineDash([]);
 
-          // Circle dot on price
+          // Circle dot on price curve
           ctx.beginPath();
-          ctx.arc(hX, hY, 4.5, 0, Math.PI * 2);
-          ctx.fillStyle = '#0f172a';
+          ctx.arc(hX, hY, 5, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
           ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = priceColor;
           ctx.stroke();
+
+          // Format day change if index > 0
+          let dayDeltaStr = '';
+          if (hIdx > 0) {
+            const prevP = items[hIdx - 1].price;
+            const deltaPct = ((it.price - prevP) / prevP) * 100;
+            const sign = deltaPct >= 0 ? '+' : '';
+            const deltaColor = deltaPct >= 0 ? '#4ade80' : '#f87171';
+            dayDeltaStr = ` <span style="color:${deltaColor};">(${sign}${deltaPct.toFixed(2)}%)</span>`;
+          }
+
+          // Format volume
+          let volStr = '—';
+          if (it.vol) {
+            if (it.vol >= 10000000) volStr = (it.vol / 10000000).toFixed(2) + ' Cr';
+            else if (it.vol >= 100000) volStr = (it.vol / 100000).toFixed(2) + ' L';
+            else if (it.vol >= 1000) volStr = (it.vol / 1000).toFixed(1) + ' K';
+            else volStr = Number(it.vol).toLocaleString('en-IN');
+          }
 
           // Tooltip HTML update
           const tt = document.getElementById('chartTooltip');
           if (tt) {
             tt.style.display = 'block';
-            let ttHtml = `<b>${it.date}</b><br>`;
-            ttHtml += `Price: <span style="color:#38bdf8;">₹${it.price.toLocaleString('en-IN', {minimumFractionDigits:2})}</span><br>`;
-            if (show50 && it.d50) ttHtml += `50 DMA: <span style="color:#fbbf24;">₹${it.d50.toFixed(2)}</span><br>`;
-            if (show200 && it.d200) ttHtml += `200 DMA: <span style="color:#60a5fa;">₹${it.d200.toFixed(2)}</span><br>`;
-            if (showVol && it.vol) ttHtml += `Vol: ${Number(it.vol).toLocaleString('en-IN')}`;
+            let ttHtml = `<div style="font-weight:900; font-size:12px; margin-bottom:4px; color:#f8fafc;">${it.date}</div>`;
+            ttHtml += `Price: <span style="font-weight:800; color:#ffffff;">₹${it.price.toLocaleString('en-IN', {minimumFractionDigits:2})}</span>${dayDeltaStr}<br>`;
+            if (show50 && it.d50) ttHtml += `50 DMA: <span style="color:#38bdf8; font-weight:700;">₹${it.d50.toFixed(2)}</span><br>`;
+            if (show200 && it.d200) ttHtml += `200 DMA: <span style="color:#c084fc; font-weight:700;">₹${it.d200.toFixed(2)}</span><br>`;
+            if (showVol) ttHtml += `Volume: <span style="color:#f1f5f9; font-weight:700;">${volStr}</span>`;
             tt.innerHTML = ttHtml;
 
             // Positioning
             let leftPos = hX + 16;
-            if (leftPos + 140 > width) leftPos = hX - 150;
-            let topPos = hY - 30;
+            if (leftPos + 180 > width) leftPos = hX - 190;
+            let topPos = hY - 35;
             if (topPos < 10) topPos = 10;
             tt.style.left = `${leftPos}px`;
             tt.style.top = `${topPos}px`;
