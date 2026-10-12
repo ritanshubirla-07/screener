@@ -24,6 +24,7 @@ def clean_typos(s):
     return s
 
 DESC_CACHE = {}
+CHART_CACHE = {}
 
 def resolve_screener_id(symbol, url=None):
     import requests
@@ -371,11 +372,21 @@ class EquityHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": f"Could not find Screener ID for {actual_sym}"}).encode("utf-8"))
                 return
 
+            cache_key = f"{actual_sym}_{days_param}"
+            if cache_key in CHART_CACHE:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(CHART_CACHE[cache_key])
+                return
+
             try:
                 import requests
                 chart_url = f"https://www.screener.in/api/company/{sid}/chart/?q=Price-Volume-DMA50-DMA200&days={days_param}"
                 res = requests.get(chart_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
                 if res.status_code == 200:
+                    CHART_CACHE[cache_key] = res.content
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Access-Control-Allow-Origin", "*")

@@ -757,7 +757,7 @@
         </div>
         <div class="metric-cell">
           <div class="metric-label">YEAR_RANGE:</div>
-          <div class="metric-value" id="weekRangeVal">—</div>
+          <div class="metric-value" id="weekRangeVal" style="font-size:13px; font-weight:900;">—</div>
         </div>
       </div>
 
@@ -1038,6 +1038,9 @@
       // Populate Company Description dynamically from Screener API
       loadCompanyDescription(company.symbol || activeSymbol);
 
+      // Populate 52-Week (1 Year) Price Range dynamically from Chart API
+      loadYearRange(company.symbol || activeSymbol);
+
       // 2. Scorecard Tables
       renderScorecard(analysis);
 
@@ -1046,6 +1049,48 @@
       renderAnnualBs(annuals);
       renderAnnualCf(annuals);
       renderShareholding(shareholding);
+    }
+
+    const YEAR_RANGE_CACHE = {};
+
+    async function loadYearRange(symbol) {
+      const el = document.getElementById('weekRangeVal');
+      if (!el) return;
+      const symKey = (symbol || '').toUpperCase();
+      if (YEAR_RANGE_CACHE[symKey]) {
+        applyYearRange(YEAR_RANGE_CACHE[symKey]);
+        return;
+      }
+
+      el.innerText = '…';
+      try {
+        const resp = await fetch(`/api/chart?symbol=${encodeURIComponent(symKey)}&days=365`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const pr = (data.datasets || []).find(d => d.metric === 'Price');
+        if (pr && pr.values && pr.values.length) {
+          const prices = pr.values.map(v => parseFloat(v[1])).filter(p => !isNaN(p));
+          if (prices.length) {
+            const minP = Math.min(...prices);
+            const maxP = Math.max(...prices);
+            const rangeInfo = { min: minP, max: maxP };
+            YEAR_RANGE_CACHE[symKey] = rangeInfo;
+            applyYearRange(rangeInfo);
+            return;
+          }
+        }
+        el.innerText = '—';
+      } catch (err) {
+        console.error("Failed to load year range from chart:", err);
+        el.innerText = '—';
+      }
+    }
+
+    function applyYearRange(rangeInfo) {
+      const el = document.getElementById('weekRangeVal');
+      if (!el || !rangeInfo) return;
+      el.innerText = `₹${Math.round(rangeInfo.min).toLocaleString('en-IN')} - ${Math.round(rangeInfo.max).toLocaleString('en-IN')}`;
+      el.title = `52W Low: ₹${rangeInfo.min.toLocaleString('en-IN', {minimumFractionDigits: 2})} | 52W High: ₹${rangeInfo.max.toLocaleString('en-IN', {minimumFractionDigits: 2})}`;
     }
 
     function escapeHtml(str) {
@@ -1628,6 +1673,17 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         currentChartData = data;
+        if (days === 365) {
+          const pr = (data.datasets || []).find(d => d.metric === 'Price');
+          if (pr && pr.values && pr.values.length) {
+            const prices = pr.values.map(v => parseFloat(v[1])).filter(p => !isNaN(p));
+            if (prices.length) {
+              const rangeInfo = { min: Math.min(...prices), max: Math.max(...prices) };
+              YEAR_RANGE_CACHE[symbol.toUpperCase()] = rangeInfo;
+              applyYearRange(rangeInfo);
+            }
+          }
+        }
         renderPriceChart();
       } catch (err) {
         console.error("Error loading chart data:", err);
