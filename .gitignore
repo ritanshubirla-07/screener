@@ -1,0 +1,37 @@
+# Python bytecode & environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+venv/
+.venv/
+env/
+
+# Large SQLite Database (Shared via Google Drive)
+*.db
+*.db.bak
+equity_engine/*.db
+equity_engine/*.db.bak
+
+# Excel generated reports & outputs
+*.xlsx
+*.xls
+*.xlsm
+~$*.xlsx
+~$*.xls
+
+# Logs & temp files
+*.log
+*.bak
+*.tmp
+.env
+
+# OS & IDE metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
