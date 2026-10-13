@@ -426,8 +426,8 @@
 
     .scorecard-5boxes {
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 14px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
     }
 
     .score-col {
@@ -780,20 +780,20 @@
         </div>
       </div>
 
-      <!-- TAB PANEL 2: SCORECARD (MAIN PENTAGON DIAGRAM + 5 BOXES BELOW IT) -->
+      <!-- TAB PANEL 2: SCORECARD (MAIN TRIANGULAR RADAR DIAGRAM + 3 BOXES BELOW IT) -->
       <div class="tab-panel" id="tab-scorecard">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-          <div class="scorecard-banner">VIKABH EQUITY: 5-PILLAR EVALUATION</div>
+          <div class="scorecard-banner">VIKABH EQUITY: TRIANGULAR EVALUATION</div>
           <div style="font-size:15px; font-weight:900; color:#173751;" id="scoreSummaryBadge">TOTAL: —</div>
         </div>
 
-        <!-- MAIN PENTAGON / RADAR DIAGRAM (TOP) -->
+        <!-- MAIN TRIANGULAR RADAR DIAGRAM (TOP) -->
         <div class="radar-main-card">
-          <div class="radar-main-title">Pillar Performance Radar</div>
+          <div class="radar-main-title">Triangular Performance Radar</div>
           <canvas id="radarCanvas" width="420" height="320"></canvas>
         </div>
 
-        <!-- 5 BOXES BELOW IT -->
+        <!-- 3 BOXES BELOW IT (GROWTH, QUALITY, VALUATION) -->
         <div class="scorecard-5boxes">
 
           <!-- 1. GROWTH -->
@@ -812,28 +812,12 @@
             <table class="param-table" id="qualityTable"></table>
           </div>
 
-          <!-- 3. CASHFLOW -->
-          <div class="score-col">
-            <div class="score-col-header cashflow">
-              CASHFLOW: <span class="score-badge-sm" id="cashflowBadge">—</span>
-            </div>
-            <table class="param-table" id="cashflowTable"></table>
-          </div>
-
-          <!-- 4. VALUATION -->
+          <!-- 3. VALUATION -->
           <div class="score-col">
             <div class="score-col-header valuation">
               VALUATION: <span class="score-badge-sm" id="valuationBadge">—</span>
             </div>
             <table class="param-table" id="valuationTable"></table>
-          </div>
-
-          <!-- 5. OWNERSHIP -->
-          <div class="score-col">
-            <div class="score-col-header ownership">
-              OWNERSHIP: <span class="score-badge-sm" id="ownershipBadge">—</span>
-            </div>
-            <table class="param-table" id="ownershipTable"></table>
           </div>
 
         </div>
@@ -1161,14 +1145,14 @@
       if (!analysis || !analysis.parameters) return;
       const p = analysis.parameters;
 
-      // The 5 pillars: 23 included parameters strictly summing to 51.0
+      // 3 Triangular pillars: Growth, Quality, Valuation (Cashflow & Ownership removed from UI)
       const growthKeys = ['1', '13', '14', '15'];
       const qualityKeys = ['2', '3', '4', '5', '6', '7', '8', '9', '26'];
-      const cashflowKeys = ['10', '11', '27'];
       const valuationKeys = ['29', '30', '31', '32', '33', '34'];
-      const ownershipKeys = ['20', '21', '22', '23'];
 
       function buildTable(keys, tableId, badgeId) {
+        const tblEl = document.getElementById(tableId);
+        const bdgEl = document.getElementById(badgeId);
         let tot = 0, maxTot = 0, rows = '';
         keys.forEach(k => {
           const item = p[k] || p[parseInt(k, 10)];
@@ -1184,29 +1168,21 @@
             <td class="pct ${colorCls}">${pct}%</td>
           </tr>`;
         });
-        document.getElementById(tableId).innerHTML = rows;
-        document.getElementById(badgeId).innerText = `${tot.toFixed(1)}/${maxTot}`;
+        if (tblEl) tblEl.innerHTML = rows;
+        if (bdgEl) bdgEl.innerText = `${tot.toFixed(1)}/${maxTot}`;
         return { tot, maxTot, pct: maxTot ? tot / maxTot : 0 };
       }
 
       const g = buildTable(growthKeys, 'growthTable', 'growthBadge');
       const q = buildTable(qualityKeys, 'qualityTable', 'qualityBadge');
-      const c = buildTable(cashflowKeys, 'cashflowTable', 'cashflowBadge');
       const v = buildTable(valuationKeys, 'valuationTable', 'valuationBadge');
-      const o = buildTable(ownershipKeys, 'ownershipTable', 'ownershipBadge');
 
-      const radarScores = { g: g.pct, q: q.pct, c: c.pct, v: v.pct, o: o.pct };
+      const radarScores = { g: g.pct, q: q.pct, v: v.pct };
       if (currentStockData) currentStockData.radarScores = radarScores;
 
-      const totalSc = g.tot + q.tot + c.tot + v.tot + o.tot;
-      const totalMx = g.maxTot + q.maxTot + c.maxTot + v.maxTot + o.maxTot;
+      const totalSc = g.tot + q.tot + v.tot;
+      const totalMx = g.maxTot + q.maxTot + v.maxTot;
       const pctTot = totalMx > 0 ? Math.round((totalSc / totalMx) * 100) : 0;
-
-      // Header score pill strictly displays included score out of 51
-      const scorePillEl = document.getElementById('scorePill');
-      if (scorePillEl) {
-        scorePillEl.innerText = `${totalSc.toFixed(1)}/${totalMx}`;
-      }
 
       const summaryEl = document.getElementById('scoreSummaryBadge');
       if (summaryEl) {
@@ -1222,7 +1198,7 @@
       }
     }
 
-    // ---- Cool Sequential Score Growth & Shape Creation Animation ----
+    // ---- Cool Sequential Score Growth & Triangular Shape Creation Animation ----
     let _radarAnimFrame = null;
 
     function animateRadarChart(scores) {
@@ -1247,19 +1223,17 @@
       const w = canvas.width, h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      const cx = w / 2, cy = h / 2 + 10, r = 110;
-      const axes = ['Growth', 'Quality', 'CashFlow', 'Valuation', 'Ownership'];
+      const cx = w / 2, cy = h / 2 + 15, r = 105;
+      const axes = ['Growth', 'Quality', 'Valuation'];
       const finalValues = [
         scores.g != null ? scores.g : 0,
         scores.q != null ? scores.q : 0,
-        scores.c != null ? scores.c : 0,
-        scores.v != null ? scores.v : 0,
-        scores.o != null ? scores.o : 0
+        scores.v != null ? scores.v : 0
       ];
-      const count = axes.length;
-      const step = (Math.PI * 2) / count;
+      const count = axes.length; // 3
+      const step = (Math.PI * 2) / count; // 2 * PI / 3 (120 deg)
 
-      // 1. Concentric grid pentagons
+      // 1. Concentric grid triangles
       ctx.strokeStyle = '#b0bec5';
       ctx.lineWidth = 1;
       for (let level = 1; level <= 4; level++) {
@@ -1275,7 +1249,7 @@
         ctx.stroke();
       }
 
-      // 2. Spokes (guidelines)
+      // 2. Spokes (guidelines to the 3 vertices)
       for (let i = 0; i < count; i++) {
         const angle = i * step - Math.PI / 2;
         const sx = cx + r * Math.cos(angle);
@@ -1316,25 +1290,36 @@
           ctx.stroke();
         }
 
-        // Live counter label for each score
-        const lx = cx + (r + 28) * Math.cos(angle);
-        const ly = cy + (r + 28) * Math.sin(angle) + 4;
+        // Label positioning for 3 vertices
+        const labelDist = r + 26;
+        let lx = cx + labelDist * Math.cos(angle);
+        let ly = cy + labelDist * Math.sin(angle);
+        if (i === 0) {
+          ly -= 4; // Top center
+        } else if (i === 1) {
+          lx += 10;
+          ly += 10; // Bottom right
+        } else if (i === 2) {
+          lx -= 10;
+          ly += 10; // Bottom left
+        }
+
         const livePct = Math.round(finalValues[i] * 100 * p);
         ctx.fillStyle = p > 0 ? '#173751' : '#78909c';
         ctx.font = 'bold 13px "Roboto Condensed", sans-serif';
-        ctx.textAlign = 'center';
+        ctx.textAlign = i === 0 ? 'center' : (i === 1 ? 'left' : 'right');
         ctx.fillText(`${axes[i]} (${livePct}%)`, lx, ly);
       }
 
-      // 4. Perimeter Line Drawing (Traces connecting lines between vertices around the shape)
-      const connectStart = 620;
-      const connectDuration = 480;
+      // 4. Perimeter Line Drawing (Traces connecting lines between the 3 vertices)
+      const connectStart = 500;
+      const connectDuration = 450;
       const connectRaw = Math.max(0, Math.min(1, (elapsedMs - connectStart) / connectDuration));
       const connectEase = connectRaw < 0.5 ? 2 * connectRaw * connectRaw : 1 - Math.pow(-2 * connectRaw + 2, 2) / 2;
 
-      // 5. Fill Fade-In (Blooms as perimeter closes)
-      const fillStart = 980;
-      const fillRaw = Math.max(0, Math.min(1, (elapsedMs - fillStart) / 420));
+      // 5. Fill Fade-In (Blooms as triangular perimeter closes)
+      const fillStart = 850;
+      const fillRaw = Math.max(0, Math.min(1, (elapsedMs - fillStart) / 400));
       const fillAlpha = 0.28 * fillRaw;
 
       if (fillAlpha > 0) {
@@ -1350,7 +1335,7 @@
 
       // Draw Perimeter Edge Lines with Tracer Spark (Rich deep navy outline + cyan spark)
       if (connectRaw > 0) {
-        const totalSegments = 5;
+        const totalSegments = 3;
         const currentSegIndex = connectEase * totalSegments;
 
         ctx.strokeStyle = '#1c4b75';
