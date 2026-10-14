@@ -180,9 +180,11 @@ This generates a formatted `.xlsx` workbook with all 5 pillars, historical table
 - **API Endpoints provided by `equity_server.py`**:
   - `GET /` — Serves the terminal SPA interface (`equity_viewer.html`).
   - `GET /api/search?q=XYZ` — Smart search endpoint returning matching equities.
+  - `GET /api/scorecard?identifier=VALUE` — Resolves an ISIN, company name, NSE symbol, or BSE code and returns only the Growth, Quality, and Valuation groups with the 15 report-card criteria shown in the template (47 possible points). Each criterion contains `criterion`, `actual`, `full_marks_at`, `score`, and `pts`. Returns `409` for ambiguous identifiers and `422` when required annual financial data is unavailable.
   - `GET /api/stock?symbol=XYZ` — Comprehensive company financial payload and 51-point scorecard.
   - `GET /api/chart?symbol=XYZ&days=10000` — Corporate-action adjusted price, volume, 50 DMA, and 200 DMA dataset.
   - `GET /api/description?symbol=XYZ` — Live company overview and structured segment breakup.
+- **Scorecard lookup example**: `http://localhost:8050/api/scorecard?identifier=INE019A01038` (JSW Steel by ISIN).
 - **Zero External Frontend Dependencies**: All styling, canvas chart rendering, and interactions are written in vanilla HTML5/CSS/JavaScript. No Node.js or npm build steps required.
 
 ---

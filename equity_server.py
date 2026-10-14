@@ -6,6 +6,7 @@ import sqlite3
 import os
 import sys
 import re
+import math
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "equity_engine", "equity_master.db")
@@ -22,6 +23,248 @@ def clean_typos(s):
     s = re.sub(r'(.)\1{2,}', r'\1', s)
     s = s.replace("dd", "d")
     return s
+
+def normalize_company_name(value):
+    value = value.casefold().replace("&", " and ")
+    value = re.sub(r"\b(ltd|limited)\b", "", value)
+    return re.sub(r"[^a-z0-9]", "", value)
+
+def resolve_company_identifier(cursor, identifier):
+    match_queries = [
+        ("isin", "SELECT * FROM companies WHERE UPPER(COALESCE(isin, '')) = UPPER(?)"),
+        ("bse_code", "SELECT * FROM companies WHERE TRIM(COALESCE(bse_code, '')) = ?"),
+        ("nse_symbol", "SELECT * FROM companies WHERE UPPER(symbol) = UPPER(?)"),
+        ("name", "SELECT * FROM companies WHERE name = ? COLLATE NOCASE")
+    ]
+
+    for matched_by, sql in match_queries:
+        rows = cursor.execute(sql, (identifier,)).fetchall()
+        if matched_by == "nse_symbol" and identifier.isdigit():
+            matched_by = "bse_code"
+        matches = {row["symbol"]: row for row in rows}
+        if len(matches) == 1:
+            return next(iter(matches.values())), matched_by, []
+        if matches:
+            return None, matched_by, [
+                {key: row[key] for key in ("symbol", "name", "isin", "bse_code")}
+                for row in matches.values()
+            ]
+
+    companies = cursor.execute("SELECT * FROM companies").fetchall()
+    normalized = normalize_company_name(identifier)
+    name_matches = [
+        row for row in companies
+        if normalize_company_name(row["name"] or "") == normalized
+    ]
+    if len(name_matches) == 1:
+        return name_matches[0], "name", []
+    if name_matches:
+        return None, "name", [
+            {key: row[key] for key in ("symbol", "name", "isin", "bse_code")}
+            for row in name_matches
+        ]
+
+    ignored_name_words = {"and", "the", "ltd", "limited", "company", "co"}
+    words = [
+        word for word in re.findall(r"[a-z0-9]+", identifier.casefold())
+        if len(word) > 1 and word not in ignored_name_words
+    ]
+    if words:
+        conditions = " AND ".join("name LIKE ?" for _ in words)
+        rows = cursor.execute(
+            f"SELECT * FROM companies WHERE {conditions} LIMIT 25",
+            [f"%{word}%" for word in words]
+        ).fetchall()
+        matches = {row["symbol"]: row for row in rows}
+        if len(matches) == 1:
+            return next(iter(matches.values())), "name", []
+        if matches:
+            return None, "name", [
+                {key: row[key] for key in ("symbol", "name", "isin", "bse_code")}
+                for row in matches.values()
+            ]
+
+    return None, None, []
+
+def clean_json_floats(obj):
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {key: clean_json_floats(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [clean_json_floats(value) for value in obj]
+    return obj
+
+def report_growth(values, years):
+    if len(values) <= years:
+        return None
+    start_value = values[-years - 1]
+    end_value = values[-1]
+    if start_value is None or end_value is None or start_value <= 0 or end_value <= 0:
+        return None
+    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
+
+def report_high_score(actual, target, max_points):
+    if actual is None or actual < 0:
+        return None if actual is None else 0
+    return min(max_points, math.floor((actual / target) * max_points + 1e-9))
+
+def report_tier_score(actual, tiers):
+    if actual is None:
+        return None
+    for threshold, points in tiers:
+        if actual <= threshold:
+            return points
+    return 0
+
+def report_at_least_score(actual, tiers):
+    if actual is None:
+        return None
+    for threshold, points in tiers:
+        if actual >= threshold:
+            return points
+    return 0
+
+def build_portfolio_scorecard(cursor, symbol):
+    annuals = cursor.execute(
+        "SELECT * FROM annual_financials WHERE symbol = ? ORDER BY fiscal_year ASC, period ASC",
+        (symbol,)
+    ).fetchall()
+    if not annuals:
+        raise ValueError(f"No annual financials found for {symbol}")
+
+    latest_quote = cursor.execute(
+        "SELECT * FROM daily_market_quotes WHERE symbol = ? ORDER BY date DESC LIMIT 1",
+        (symbol,)
+    ).fetchone()
+    share_rows = cursor.execute(
+        "SELECT period, promoters_pct FROM shareholding WHERE symbol = ?",
+        (symbol,)
+    ).fetchall()
+    month_numbers = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12
+    }
+
+    def period_order(row):
+        match = re.search(r"([A-Za-z]{3})\s+(\d{4})", row["period"] or "")
+        if not match:
+            return (0, 0)
+        return (int(match.group(2)), month_numbers.get(match.group(1).casefold(), 0))
+
+    share_rows = sorted(share_rows, key=period_order)
+    latest_promoter = share_rows[-1]["promoters_pct"] if share_rows else None
+    sales = [row["sales"] for row in annuals]
+    operating_profit = [row["operating_profit"] for row in annuals]
+    eps = [row["eps"] for row in annuals]
+
+    def cagr(values, years):
+        if len(values) <= years:
+            return None
+        fiscal_year_gap = annuals[-1]["fiscal_year"] - annuals[-years - 1]["fiscal_year"]
+        if fiscal_year_gap <= 0:
+            return None
+        return report_growth(values, fiscal_year_gap)
+
+    def average_roce(years):
+        if len(annuals) < years:
+            return None
+        values = []
+        for row in annuals[-years:]:
+            capital_employed = (row["net_worth"] or 0) + (row["borrowings"] or 0)
+            ebit = (row["operating_profit"] or 0) - (row["depreciation"] or 0)
+            if capital_employed <= 0:
+                return None
+            values.append(ebit / capital_employed * 100.0)
+        return sum(values) / len(values)
+
+    def cumulative_cfo_pat_ratio(years):
+        if len(annuals) < years:
+            return None
+        period_rows = annuals[-years:]
+        cumulative_pat = sum(row["pat"] or 0 for row in period_rows)
+        if cumulative_pat <= 0:
+            return None
+        return sum(row["cfo"] or 0 for row in period_rows) / cumulative_pat * 100.0
+
+    def format_value(value, suffix="", decimals=1):
+        return "—" if value is None else f"{value:.{decimals}f}{suffix}"
+
+    def criterion(name, actual, actual_text, full_marks_at, score, max_points):
+        return {
+            "criterion": name,
+            "actual": actual_text,
+            "full_marks_at": full_marks_at,
+            "score": score,
+            "pts": max_points
+        }
+
+    sales_1y = report_growth(sales, 1)
+    sales_3y = cagr(sales, 3)
+    op_1y = report_growth(operating_profit, 1)
+    op_3y = cagr(operating_profit, 3)
+    eps_1y = report_growth(eps, 1)
+    eps_3y = cagr(eps, 3)
+    roce_3y = average_roce(3)
+    roce_5y = average_roce(5)
+    cfo_pat_3y = cumulative_cfo_pat_ratio(3)
+    cfo_pat_5y = cumulative_cfo_pat_ratio(5)
+    latest_annual = annuals[-1]
+    debt_equity = None
+    net_worth = latest_annual["net_worth"]
+    if net_worth:
+        debt_equity = (latest_annual["borrowings"] or 0) / net_worth
+    pe_ratio = latest_quote["pe"] if latest_quote else None
+    dividend_yield = latest_quote["div_yield"] if latest_quote else None
+    peg_ratio = pe_ratio / eps_3y if pe_ratio is not None and eps_3y and eps_3y > 0 else None
+
+    groups = [
+        {
+            "name": "Growth",
+            "criteria": [
+                criterion("Sales growth · 1 yr", sales_1y, format_value(sales_1y, "%"), "≥ 15%", report_high_score(sales_1y, 15, 3), 3),
+                criterion("Sales growth · 3 yr CAGR", sales_3y, format_value(sales_3y, "%"), "≥ 15%", report_high_score(sales_3y, 15, 3), 3),
+                criterion("Operating profit growth · 1 yr", op_1y, format_value(op_1y, "%"), "≥ 20%", report_high_score(op_1y, 20, 3), 3),
+                criterion("Operating profit growth · 3 yr CAGR", op_3y, format_value(op_3y, "%"), "≥ 20%", report_high_score(op_3y, 20, 3), 3),
+                criterion("EPS growth · 1 yr", eps_1y, format_value(eps_1y, "%"), "≥ 20%", report_high_score(eps_1y, 20, 3), 3),
+                criterion("EPS growth · 3 yr CAGR", eps_3y, format_value(eps_3y, "%"), "≥ 20%", report_high_score(eps_3y, 20, 3), 3)
+            ]
+        },
+        {
+            "name": "Quality",
+            "criteria": [
+                criterion("ROCE · 3 yr average", roce_3y, format_value(roce_3y, "%"), "≥ 20%", report_at_least_score(roce_3y, [(20, 3), (15, 2), (12, 1)]), 3),
+                criterion("ROCE · 5 yr average", roce_5y, format_value(roce_5y, "%"), "≥ 20%", report_at_least_score(roce_5y, [(20, 3), (15, 2), (12, 1)]), 3),
+                criterion("Cumulative CFO / PAT · 3 yr", cfo_pat_3y, format_value(cfo_pat_3y, "%"), "≥ 100%", report_high_score(cfo_pat_3y, 100, 4), 4),
+                criterion("Cumulative CFO / PAT · 5 yr", cfo_pat_5y, format_value(cfo_pat_5y, "%"), "≥ 100%", report_high_score(cfo_pat_5y, 100, 4), 4),
+                criterion("Debt to equity", debt_equity, format_value(debt_equity, "", 2), "≤ 0.2", report_tier_score(debt_equity, [(0.2, 3), (0.5, 2), (0.75, 1)]), 3),
+                criterion("Promoter holding", latest_promoter, format_value(latest_promoter, "%"), "≥ 51%", None if latest_promoter is None else (2 if latest_promoter >= 51 else 1 if latest_promoter >= 40 else 0), 2)
+            ]
+        },
+        {
+            "name": "Valuation",
+            "criteria": [
+                criterion("P/E ratio", pe_ratio, format_value(pe_ratio, "", 1), "≤ 15", report_tier_score(pe_ratio, [(15, 4), (18, 3), (20, 2), (25, 1)]), 4),
+                criterion("PEG ratio", peg_ratio, format_value(peg_ratio, "", 2), "≤ 0.8", report_tier_score(peg_ratio, [(0.8, 3), (1.0, 2), (1.5, 1)]), 3),
+                criterion("Dividend yield", dividend_yield, format_value(dividend_yield, "%"), "≥ 3%", report_high_score(dividend_yield, 3, 3), 3)
+            ]
+        }
+    ]
+
+    for group in groups:
+        group["score"] = sum(item["score"] or 0 for item in group["criteria"])
+        group["max_score"] = sum(item["pts"] for item in group["criteria"])
+        complete = all(item["score"] is not None for item in group["criteria"])
+        group["percentage"] = round(group["score"] / group["max_score"] * 100) if complete and group["max_score"] else None
+
+    total_score = sum(group["score"] for group in groups)
+    complete = all(item["score"] is not None for group in groups for item in group["criteria"])
+    return {
+        "total_score": total_score,
+        "max_total": sum(group["max_score"] for group in groups),
+        "score_pct": round(total_score / 47 * 100, 1) if complete else None,
+        "groups": groups
+    }
 
 DESC_CACHE = {}
 CHART_CACHE = {}
@@ -109,6 +352,13 @@ def fetch_screener_description(symbol, url=None):
         return {"symbol": symbol, "overview": "Company overview could not be loaded.", "highlights": []}
 
 class EquityHandler(http.server.SimpleHTTPRequestHandler):
+    def send_json(self, status, payload):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(clean_json_floats(payload), default=str, allow_nan=False).encode("utf-8"))
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -206,7 +456,56 @@ class EquityHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(results[:15]).encode("utf-8"))
             return
 
-        # 3. Smart Stock Resolver API: /api/stock?symbol=XYZ
+        # 3. Scorecard lookup by ISIN, name, NSE symbol, or BSE code.
+        if path == "/api/scorecard":
+            identifier = query.get("identifier", query.get("q", [""]))[0].strip()
+            if not identifier:
+                self.send_json(400, {"error": "Provide an identifier query parameter."})
+                return
+
+            conn = get_db()
+            cursor = conn.cursor()
+            company_row, matched_by, candidates = resolve_company_identifier(cursor, identifier)
+            if candidates:
+                conn.close()
+                self.send_json(409, {
+                    "error": "Identifier matches multiple companies.",
+                    "identifier": identifier,
+                    "matched_by": matched_by,
+                    "candidates": candidates
+                })
+                return
+            if not company_row:
+                conn.close()
+                self.send_json(404, {"error": f"No company matched '{identifier}'."})
+                return
+
+            company = dict(company_row)
+            symbol = company["symbol"]
+            try:
+                scorecard = build_portfolio_scorecard(cursor, symbol)
+            except Exception as exc:
+                conn.close()
+                self.send_json(422, {
+                    "error": "Company was found, but its report-card data is unavailable.",
+                    "company": {"symbol": symbol, "name": company["name"]},
+                    "detail": str(exc)
+                })
+                return
+            conn.close()
+
+            self.send_json(200, {
+                "query": identifier,
+                "matched_by": matched_by,
+                "company": {
+                    key: company.get(key)
+                    for key in ("symbol", "name", "isin", "bse_code", "industry", "sector")
+                },
+                "scorecard": scorecard
+            })
+            return
+
+        # 4. Smart Stock Resolver API: /api/stock?symbol=XYZ
         if path == "/api/stock":
             raw_sym = query.get("symbol", ["FRONTSP"])[0].strip()
             conn = get_db()
@@ -298,18 +597,6 @@ class EquityHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception as e:
                     print(f"Error computing 51-point analysis for {actual_sym}: {e}")
 
-            import math
-            def clean_json_floats(obj):
-                if isinstance(obj, float):
-                    if math.isnan(obj) or math.isinf(obj):
-                        return None
-                    return obj
-                elif isinstance(obj, dict):
-                    return {k: clean_json_floats(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [clean_json_floats(v) for v in obj]
-                return obj
-
             data = {
                 "company": comp,
                 "quote": quote,
@@ -327,7 +614,7 @@ class EquityHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(clean_data, default=str).encode("utf-8"))
             return
 
-        # 4. Direct Screener Chart API Proxy: /api/chart?symbol=XYZ&days=10000
+        # 5. Direct Screener Chart API Proxy: /api/chart?symbol=XYZ&days=10000
         if path == "/api/chart":
             raw_sym = query.get("symbol", ["FRONTSP"])[0].strip()
             days_param = query.get("days", ["10000"])[0].strip()
@@ -408,7 +695,7 @@ class EquityHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
                 return
 
-        # 5. Live Company Description Proxy: /api/description?symbol=XYZ
+        # 6. Live Company Description Proxy: /api/description?symbol=XYZ
         if path == "/api/description":
             raw_sym = query.get("symbol", ["FRONTSP"])[0].strip()
             conn = get_db()
